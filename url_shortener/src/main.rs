@@ -8,8 +8,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let state = Arc::new(Mutex::new(AppState::new()));
     let app = app(state);
 
-    let listener = TcpListener::bind("127.0.0.1:3000").await?;
-    println!("listening on http://127.0.0.1:3000");
+    // Port from the PORT env var (used by containers/platforms), default 3000.
+    let port = std::env::var("PORT").unwrap_or_else(|_| "3000".to_string());
+    let listener = TcpListener::bind(format!("0.0.0.0:{port}")).await?;
+    println!("listening on http://0.0.0.0:{port}");
     axum::serve(listener, app).await?;
     Ok(())
 }
