@@ -4,8 +4,9 @@
 //! The binary (`main.rs`) only starts the server.
 //!
 //! Endpoints:
-//!   POST /shorten   body: {"url": "https://example.com/very/long"}  -> {"short": "0"}
-//!   GET /{code}     307-redirects to the stored URL
+//!   POST /shorten     body: {"url": "https://example.com/very/long"}  -> {"short": "0"}
+//!   GET /{code}       307-redirects to the stored URL
+//!   GET /stats/{code} -> {"short": "0", "clicks": 3}
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -23,12 +24,19 @@ use serde::{Deserialize, Serialize};
 // Shared state
 // ---------------------------------------------------------------------------
 
-/// What every request handler needs: the map of code -> url, plus a counter
+/// A stored link: the target URL plus how many times it has been followed.
+#[derive(Debug)]
+struct Link {
+    url: String,
+    clicks: u64,
+}
+
+/// What every request handler needs: the map of code -> link, plus a counter
 /// so each new link gets a unique code. `Arc<Mutex<..>>` lets many requests
 /// touch it at once without data races.
 #[derive(Default)]
 pub struct AppState {
-    links: HashMap<String, String>,
+    links: HashMap<String, Link>,
     next_id: u64,
 }
 
@@ -53,6 +61,12 @@ pub struct ShortenRequest {
 #[derive(Serialize)]
 pub struct ShortenResponse {
     pub short: String,
+}
+
+#[derive(Serialize)]
+pub struct StatsResponse {
+    pub short: String,
+    pub clicks: u64,
 }
 
 // ---------------------------------------------------------------------------
@@ -94,19 +108,39 @@ pub async fn shorten(
     let mut state = state.lock().expect("state mutex poisoned");
     let code = encode(state.next_id);
     state.next_id += 1;
-    state.links.insert(code.clone(), url);
+    state
+        .links
+        .insert(code.clone(), Link { url, clicks: 0 });
 
     Ok(Json(ShortenResponse { short: code }))
 }
 
-/// GET /{code} — look up the URL and redirect the browser there.
+/// GET /{code} — look up the URL, count the click, and redirect.
 pub async fn redirect(
     State(state): State<AppStateRef>,
     Path(code): Path<String>,
 ) -> Result<Redirect, StatusCode> {
+    let mut state = state.lock().expect("state mutex poisoned");
+    match state.links.get_mut(&code) {
+        Some(link) => {
+            link.clicks += 1;
+            Ok(Redirect::temporary(&link.url))
+        }
+        None => Err(StatusCode::NOT_FOUND),
+    }
+}
+
+/// GET /stats/{code} — report how many times a link has been followed.
+pub async fn stats(
+    State(state): State<AppStateRef>,
+    Path(code): Path<String>,
+) -> Result<Json<StatsResponse>, StatusCode> {
     let state = state.lock().expect("state mutex poisoned");
     match state.links.get(&code) {
-        Some(url) => Ok(Redirect::temporary(url)),
+        Some(link) => Ok(Json(StatsResponse {
+            short: code,
+            clicks: link.clicks,
+        })),
         None => Err(StatusCode::NOT_FOUND),
     }
 }
@@ -119,6 +153,7 @@ pub async fn redirect(
 pub fn app(state: AppStateRef) -> Router {
     Router::new()
         .route("/shorten", axum::routing::post(shorten))
+        .route("/stats/{code}", get(stats))
         .route("/{code}", get(redirect))
         .with_state(state)
 }

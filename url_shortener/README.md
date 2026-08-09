@@ -9,10 +9,11 @@ Built with **axum** + **tokio**, with an emphasis on tests (unit + integration).
 
 - `POST /shorten` — create a short link from any `http://` or `https://` URL
 - `GET /{code}` — 307-redirect to the stored URL (404 for unknown codes)
+- `GET /stats/{code}` — how many times a link has been clicked
 - Base-62 short codes (`0`, `1`, ..., `z`, `A`, ..., `Z`, `10`, `11`, ...)
 - Input validation: empty or non-http URLs get a `400`
 - Configurable port via the `PORT` environment variable
-- 9 tests: unit tests for the code encoder, integration tests driving the full HTTP router
+- 12 tests: unit tests for the code encoder, integration tests driving the full HTTP router
 
 ## Quick start
 
@@ -36,10 +37,11 @@ curl -i http://localhost:3000/0
 
 ## API
 
-| Method | Path       | Body                    | Returns                            |
-|--------|------------|-------------------------|------------------------------------|
-| POST   | `/shorten` | `{"url": "https://..."}` | `200 {"short":"0"}` / `400`       |
-| GET    | `/{code}`  | —                       | `307` → original URL / `404`       |
+| Method | Path           | Body                    | Returns                                     |
+|--------|----------------|-------------------------|---------------------------------------------|
+| POST   | `/shorten`     | `{"url": "https://..."}` | `200 {"short":"0"}` / `400`                |
+| GET    | `/{code}`      | —                       | `307` → original URL / `404`                |
+| GET    | `/stats/{code}`| —                       | `200 {"short":"0","clicks":2}` / `404`      |
 
 ## Tests
 
@@ -70,5 +72,4 @@ tests/
 ## Roadmap
 
 - [ ] SQLite persistence so links survive restarts
-- [ ] `GET /stats/{code}` — click counters
 - [ ] Deploy to a free host (Render / Railway / Fly.io)

@@ -101,3 +101,80 @@ async fn redirect_unknown_code_is_404() {
         .unwrap();
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
 }
+
+/// Shorten a URL and return the assigned short code, reusing one shared state.
+async fn shorten_on(state: &Arc<Mutex<AppState>>, url: &str) -> String {
+    let response = app(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/shorten")
+                .header("content-type", "application/json")
+                .body(Body::from(format!(r#"{{"url":"{url}"}}"#)))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    json["short"].as_str().unwrap().to_string()
+}
+
+async fn get_clicks(state: &Arc<Mutex<AppState>>, code: &str) -> u64 {
+    let response = app(state.clone())
+        .oneshot(
+            Request::builder()
+                .uri(format!("/stats/{code}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    json["clicks"].as_u64().unwrap()
+}
+
+#[tokio::test]
+async fn stats_starts_at_zero() {
+    let state = Arc::new(Mutex::new(AppState::new()));
+    let code = shorten_on(&state, "https://example.com").await;
+    assert_eq!(get_clicks(&state, &code).await, 0);
+}
+
+#[tokio::test]
+async fn stats_counts_redirects() {
+    let state = Arc::new(Mutex::new(AppState::new()));
+    let code = shorten_on(&state, "https://example.com").await;
+
+    for _ in 0..3 {
+        let response = app(state.clone())
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/{code}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::TEMPORARY_REDIRECT);
+    }
+
+    assert_eq!(get_clicks(&state, &code).await, 3);
+}
+
+#[tokio::test]
+async fn stats_unknown_code_is_404() {
+    let response = test_app()
+        .oneshot(
+            Request::builder()
+                .uri("/stats/does-not-exist")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
