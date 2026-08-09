@@ -1,19 +1,20 @@
-use std::sync::{Arc, Mutex};
-
-use axum::{body::Body, http::{Request, StatusCode}, Router};
+use axum::{
+    body::Body,
+    http::{Request, StatusCode},
+};
 use http_body_util::BodyExt;
 use tower::ServiceExt;
 
 use url_shortener::{app, AppState};
 
-/// Build a fresh router on its own state, so tests don't share data.
-fn test_app() -> Router {
-    app(Arc::new(Mutex::new(AppState::new())))
+/// Build a fresh router on its own in-memory database, so tests are isolated.
+async fn new_state() -> AppState {
+    AppState::new_in_memory().await.unwrap()
 }
 
 /// POST a JSON body to /shorten and read back the response as (status, text).
 async fn post_shorten(body: &str) -> (StatusCode, String) {
-    let response = test_app()
+    let response = app(new_state().await)
         .oneshot(
             Request::builder()
                 .method("POST")
@@ -52,7 +53,7 @@ async fn shorten_rejects_empty_url() {
 
 #[tokio::test]
 async fn redirect_returns_the_original_url() {
-    let state = Arc::new(Mutex::new(AppState::new()));
+    let state = new_state().await;
 
     // 1. create a short link
     let shorten_response = app(state.clone())
@@ -90,7 +91,7 @@ async fn redirect_returns_the_original_url() {
 
 #[tokio::test]
 async fn redirect_unknown_code_is_404() {
-    let response = test_app()
+    let response = app(new_state().await)
         .oneshot(
             Request::builder()
                 .uri("/does-not-exist")
@@ -103,7 +104,7 @@ async fn redirect_unknown_code_is_404() {
 }
 
 /// Shorten a URL and return the assigned short code, reusing one shared state.
-async fn shorten_on(state: &Arc<Mutex<AppState>>, url: &str) -> String {
+async fn shorten_on(state: &AppState, url: &str) -> String {
     let response = app(state.clone())
         .oneshot(
             Request::builder()
@@ -121,7 +122,7 @@ async fn shorten_on(state: &Arc<Mutex<AppState>>, url: &str) -> String {
     json["short"].as_str().unwrap().to_string()
 }
 
-async fn get_clicks(state: &Arc<Mutex<AppState>>, code: &str) -> u64 {
+async fn get_clicks(state: &AppState, code: &str) -> u64 {
     let response = app(state.clone())
         .oneshot(
             Request::builder()
@@ -139,14 +140,14 @@ async fn get_clicks(state: &Arc<Mutex<AppState>>, code: &str) -> u64 {
 
 #[tokio::test]
 async fn stats_starts_at_zero() {
-    let state = Arc::new(Mutex::new(AppState::new()));
+    let state = new_state().await;
     let code = shorten_on(&state, "https://example.com").await;
     assert_eq!(get_clicks(&state, &code).await, 0);
 }
 
 #[tokio::test]
 async fn stats_counts_redirects() {
-    let state = Arc::new(Mutex::new(AppState::new()));
+    let state = new_state().await;
     let code = shorten_on(&state, "https://example.com").await;
 
     for _ in 0..3 {
@@ -167,7 +168,7 @@ async fn stats_counts_redirects() {
 
 #[tokio::test]
 async fn stats_unknown_code_is_404() {
-    let response = test_app()
+    let response = app(new_state().await)
         .oneshot(
             Request::builder()
                 .uri("/stats/does-not-exist")
@@ -177,4 +178,19 @@ async fn stats_unknown_code_is_404() {
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn links_survive_across_states() {
+    // Simulate a server restart: write to one AppState, read from a fresh one
+    // pointing at the same database. Tests the real reason we moved to SQLite.
+    let dir = tempfile::tempdir().unwrap();
+    let db_url = format!("sqlite://{}", dir.path().join("persist.db").display());
+
+    let first = AppState::new(&db_url).await.unwrap();
+    let code = shorten_on(&first, "https://example.com/persisted").await;
+
+    let second = AppState::new(&db_url).await.unwrap();
+    assert_eq!(get_clicks(&second, &code).await, 0);
+    assert_eq!(code, "0");
 }

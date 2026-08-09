@@ -10,16 +10,18 @@ Built with **axum** + **tokio**, with an emphasis on tests (unit + integration).
 - `POST /shorten` — create a short link from any `http://` or `https://` URL
 - `GET /{code}` — 307-redirect to the stored URL (404 for unknown codes)
 - `GET /stats/{code}` — how many times a link has been clicked
+- **SQLite persistence** — links survive server restarts
 - Base-62 short codes (`0`, `1`, ..., `z`, `A`, ..., `Z`, `10`, `11`, ...)
 - Input validation: empty or non-http URLs get a `400`
-- Configurable port via the `PORT` environment variable
-- 12 tests: unit tests for the code encoder, integration tests driving the full HTTP router
+- Configurable port via `PORT` and database via `DATABASE_URL`
+- 12 tests: unit tests for the code encoder, integration tests driving the full HTTP router against a real SQLite DB
 
 ## Quick start
 
 ```bash
 cargo run
 # listening on http://0.0.0.0:3000
+# (links are stored in ./links.db by default; override with DATABASE_URL)
 ```
 
 ```bash
@@ -51,6 +53,8 @@ cargo test
 
 Runs unit tests (`src/lib.rs`) and integration tests (`tests/api.rs`) that fire real
 HTTP requests at the router with `tower::ServiceExt::oneshot` — no server or port needed.
+Tests run against an in-memory SQLite database, and one test simulates a server restart
+to prove data survives in a real DB file.
 
 ## Docker
 
@@ -63,13 +67,12 @@ docker run -p 3000:3000 url_shortener
 
 ```
 src/
-  lib.rs    # AppState, code encoder, handlers, router builder, unit tests
-  main.rs   # thin binary: reads PORT, binds, serves
+  lib.rs    # AppState (SQLite pool), code encoder, handlers, router builder, unit tests
+  main.rs   # thin binary: reads PORT + DATABASE_URL, binds, serves
 tests/
   api.rs    # integration tests through the full router
 ```
 
 ## Roadmap
 
-- [ ] SQLite persistence so links survive restarts
 - [ ] Deploy to a free host (Render / Railway / Fly.io)

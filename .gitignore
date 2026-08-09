@@ -1,3 +1,4 @@
 /target/
 /index/target/
 /url_shortener/target/
+/url_shortener/links.db
